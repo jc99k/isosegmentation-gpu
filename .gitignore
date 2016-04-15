@@ -1,0 +1,16 @@
+*.vcxproj
+*.sln
+*.sdf
+*.filters
+*.user
+*.exp
+*.lib
+*.idb
+*.pdb
+*.cache
+*.obj
+*.deps
+*.tlog
+*.log
+Debug/
+x64/
