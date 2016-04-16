@@ -604,18 +604,18 @@ __global__ void basic_colorpatterns_kernel(cudaTextureObject_t texObj, float *co
 //}
 //
 //template<class G, kernel K>
-__global__ void compute_similarity_kernel(const int *Ao, const int *Ac, cudaTextureObject_t texObj, float2 *cell_centroids, float2 *facet_centroids, const float *colorpatterns, float *similarities)
-{
-	// Cuda-style for
-	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
-		// look at neighbors
-		for (int j = Ao[i]; j < Ao[i+1]; j++) {
-   			if( FindIsovalue(cell_centroids[i], facet_centroids[j], texObj) || FindIsovalue(facet_centroids[j], cell_centroids[Ac[j]], texObj) )
-				similarities[j] = 1.0f;
-			else 
-				similarities[j] = similarity(colorpatterns[i],colorpatterns[Ac[j]]);
-		}
-	}
-}
+//__global__ void compute_similarity_kernel(const int *Ao, const int *Ac, cudaTextureObject_t texObj, float2 *cell_centroids, float2 *facet_centroids, const float *colorpatterns, float *similarities)
+//{
+//	// Cuda-style for
+//	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
+//		// look at neighbors
+//		for (int j = Ao[i]; j < Ao[i+1]; j++) {
+//   			if( FindIsovalue(cell_centroids[i], facet_centroids[j], texObj) || FindIsovalue(facet_centroids[j], cell_centroids[Ac[j]], texObj) )
+//				similarities[j] = 1.0f;
+//			else
+//				similarities[j] = similarity(colorpatterns[i],colorpatterns[Ac[j]]);
+//		}
+//	}
+//}
 //
 /////////////////////////////////////////////////////////

@@ -1,5 +1,7 @@
-#include <stdio.h>
+#include <cstdio>
 #include <stdlib.h>
+#include <iostream>
+#include <fstream>
 #include "cudagraph.cuh"
 #include "thrust_headers.h"
 
@@ -8,7 +10,7 @@
 template<class XSpace>
 void CCudaCSRGraph<XSpace>::UnifiedMalloc()
 {
-	cudaMallocManaged(&m_xadj,				(v+1)*sizeof(int)		);
+    cudaMallocManaged(&m_xadj,				(v+1)*sizeof(int)		);
 	cudaMallocManaged(&m_adjncy,			(e * 2)*sizeof(int)		);
 	cudaMallocManaged(&m_updatepatterns,	(v)*sizeof(int)			);
 	cudaMallocManaged(&m_labels,			(v)*sizeof(int)			);
@@ -45,6 +47,16 @@ void CCudaCSRGraph<XSpace>::Print()
 	for (int i = 0; i<e*2  ; ++i) printf("%i ", m_adjncy[i]); printf("\n");
 	for (int i = 0; i < v; ++i)   printf("%i %i %i ", m_cellvertices[i].x, m_cellvertices[i].y, m_cellvertices[i].z); printf("\n");
 	for (int i = 0; i < dv; ++i)  printf("%.2f %.2f ", m_delaunayvertices[i].x, m_delaunayvertices[i].y); printf("\n");
+}
+
+template<class XSpace>
+void CCudaCSRGraph<XSpace>::Print2()
+{
+    Synchronize();
+    //std::ofstream os("out.txt", std::ofstream::out);
+//    for (int i = 0; i < v; ++i)   printf("%.2f\n", m_colorpatterns[i]); printf("\n");
+    //for (int i = 0; i < v; ++i) os << m_colorpatterns[i] << "\n";
+    for (int i = 0; i < v; ++i) std::cout << m_colorpatterns[i] << std::endl;
 }
 
 

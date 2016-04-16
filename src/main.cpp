@@ -2,7 +2,6 @@
 #include "cudagraphsegmentator.cuh"
 
 using namespace std;
-using namespace cimg_library;
 
 typedef CCudaCSRGraphSegmentator<int> CGraphSegmentator;
 
@@ -10,13 +9,15 @@ int main()
 {
 	/*GPU Segmentator Class*/
 	CGraphSegmentator IsoSegmentator;
-     
+
+    IsoSegmentator.write();
+
 	/*Colorize graph*/
 	IsoSegmentator.colorize();
 
 	/*Compute Color Patterns*/
-	IsoSegmentator.compute_colorpatterns();
-	//IsoSegmentator.write();
+	//IsoSegmentator.compute_colorpatterns();
+	IsoSegmentator.write();
 
 	/*Compute Cell Similarities*/
 	// gs.compute_similarities();

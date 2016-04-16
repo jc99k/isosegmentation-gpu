@@ -1,6 +1,7 @@
 #include "cudagraph.cuh"
 
 #include "csr_reader.h"
+#include "csr_writer.h"
 #include "img_reader.h"
 #include "isovaluelist.h"
 
@@ -9,6 +10,7 @@ class CCudaCSRGraphSegmentator
 {
 	typedef CCudaCSRGraph<XSpace> cudaCSRGraph_t;
 	typedef CGraphReader<cudaCSRGraph_t> cudaCSRGraphReader_t;
+    typedef CGraphWriter<cudaCSRGraph_t> cudaCSRGraphWriter_t;
 	typedef CImageReader<XSpace> cudaImageReader_t;
 	typedef CIsoValueList<XSpace> CIsovalueList_t;
 
@@ -17,6 +19,7 @@ public:
 	~CCudaCSRGraphSegmentator();
 	void colorize();
 	void compute_colorpatterns();
+    void compute_similarities();
 	void write();
 
 private:

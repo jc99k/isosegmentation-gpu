@@ -12,6 +12,7 @@ public:
 	void UnifiedMalloc();
 	void Synchronize();
 	void Print();
+    void Print2();
 
 	inline int* xadj()					{ return m_xadj; }
 	inline int* adjncy()				{ return m_adjncy; }
