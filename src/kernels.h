@@ -1,10 +1,9 @@
+
 #include <stdio.h>
 #include <cuda.h>
 #include <curand_kernel.h>
 #include <helper_math.h>
-
-#include "class.h"
-#include "cudagraph.cuh"
+//#include "cutil_math.h"
 
 __constant__ int V;
 __constant__ int E;
@@ -15,41 +14,15 @@ __constant__ float Isovalues[64];
 __constant__ int Num_isovalues;
 
 ///////////////////////////////////////////////////////
-//
-//__device__ float Ker1(float i, float j) { return 1-expf(-1*abs(i-j)/50); } 
-//
-//typedef float (*pSimilarityDevKernel_t)(float,float);
-//__device__ pSimilarityDevKernel_t Similarity_Kernels[1] = { Ker1 };
-//
-//template<kernel K>
-//__device__ float similarity(float i, float j){
-//	return Similarity_Kernels[K](i,j);
-//}
 
 __device__ float similarity(float i, float j) { 
-	return 1-expf(-1*abs(i-j)/50); 
+	//for (int k = 0; k<Num_isovalues; k++)
+	//{
+	//	if( (i - Isovalues[k])*(j - Isovalues[k]) <= 0 )
+	//		return 1.0f;
+	//}
+	return 1.0f-expf(-1*abs(i-j)/50); 
 } 
-
-///////////////////////////////////////////////////////
-
-/* TEST KERNELS */
-
-__global__ void test_texture_kernel(float* image, cudaTextureObject_t texObj)
-{
-	int x = threadIdx.x + blockIdx.x * blockDim.x;
-  	int y = threadIdx.y + blockIdx.y * blockDim.y;
-  	int id = x + y * blockDim.x * gridDim.x;
-
-	image[id] = 255 - tex2D<float>(texObj,x,y);
-}
-
-__global__ void test_constants_kernel()
-{
-	printf("Isovalues: ");
-	for(int i=0; i<Num_isovalues; i++)
-		printf("%.2f ", Isovalues[i]);
-	printf("\n");
-}
 
 ///////////////////////////////////////////////////////
 
@@ -70,7 +43,7 @@ __global__ void rng_generate_kernel(float *result)
 ///////////////////////////////////////////////////////
 
 ///* COLORING KERNEL */
-//
+
 __global__ void color_jpl_kernel(int c, const int *Ao, const int *Ac, const float *randoms, int *colors)
 {
 	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
@@ -95,96 +68,167 @@ __global__ void color_jpl_kernel(int c, const int *Ao, const int *Ac, const floa
 		if (f) colors[i] = c;
 	}
 }
-//
+
 /////////////////////////////////////////////////////////
-//
-///* GEOMETRIC ADJUSTMENTS KERNELS */
-//
-//template<class G, kernel K>
-//__global__ void flip_verticality_kernel(float2 *delaunay_vertices)
-//{
-//	// Cuda-style for
-//	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < DV ; i += blockDim.x*gridDim.x) {
-//		delaunay_vertices[i].y = Img_height - delaunay_vertices[i].y;
-//	}
-//}
-//
-//template<class G, kernel K>
-__global__ void compute_centroids_kernel(const int *Ao, const int *Ac, int3 *cell_vertices, float2 *delaunay_vertices, float2 *cell_centroids)
+
+/* GEOMETRIC ADJUSTMENTS KERNELS */
+
+//template<class XSpace>
+__global__ void flip_verticality_kernel(float2 *delaunay_vertices)
 {
 	// Cuda-style for
-	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < DV ; i += blockDim.x*gridDim.x) {
+		delaunay_vertices[i].y = Img_height - delaunay_vertices[i].y;
+	}
+}
+
+__global__ void flip_verticality_kernel_3D(float3 *delaunay_vertices)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < DV; i += blockDim.x*gridDim.x) {
+		delaunay_vertices[i].y = Img_height - delaunay_vertices[i].y;
+	}
+}
+
+//
+//template<class G, kernel K>
+__global__ void compute_cellcentroids_kernel(const int *Ao, const int *Ac, int3 *cell_vertices, float2 *delaunay_vertices, float2 *cell_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
 
 		// Cell Centroid
 		cell_centroids[i] = (delaunay_vertices[cell_vertices[i].x] + delaunay_vertices[cell_vertices[i].y] + delaunay_vertices[cell_vertices[i].z]) / 3.0f;
-		
-//
-//		// Facet Centroids, for each neighbor
-//		for (int k = Ao[i]; k < Ao[i+1]; k++) {
-//
-//			float2 fcentroid;
-//			int* ptr1 = &cell_vertices[i].x;
-//			int* ptr2 = &cell_vertices[Ac[k]].x;
-//
-//			for(int m=0; m<3; m++) {
-//				for( int n=0; n<3; n++) {
-//					if( *(ptr1+m) == *(ptr2+n) ) fcentroid += make_float2(delaunay_vertices[*(ptr1+m)]);
-//				}
-//			}
-//
-//			facet_centroids[k] = make_int2(fcentroid/2);
-//		}
+		//printf("Ccentroid[%i] = (%.2f,%.2f)\n", i, cell_centroids[i].x, cell_centroids[i].y);
+	}
+}
+
+__global__ void compute_cellcentroids_kernel_3D(const int *Ao, const int *Ac, int4 *cell_vertices, float3 *delaunay_vertices, float3 *cell_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
+
+		// Cell Centroid
+		cell_centroids[i] = (delaunay_vertices[cell_vertices[i].x] + delaunay_vertices[cell_vertices[i].y] + delaunay_vertices[cell_vertices[i].z] + delaunay_vertices[cell_vertices[i].w]) / 4.0f;
+		//printf("Ccentroid[%i] = (%.2f,%.2f,%.2f)\n", i, cell_centroids[i].x, cell_centroids[i].y, cell_centroids[i].z);
+	}
+}
+
+__global__ void compute_facetcentroids_kernel(const int *Ao, const int *Ac, int3 *cell_vertices, float2 *delaunay_vertices, float2 *facet_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
+
+		// Facet Centroids, for each neighbor
+		for (int k = Ao[i]; k < Ao[i+1]; ++k) {
+
+			float2 fcentroid;
+			fcentroid.x = fcentroid.y = 0.0f;
+			int* ptr1 = &cell_vertices[i].x;
+			int* ptr2 = &cell_vertices[Ac[k]].x;
+
+			for(int m=0; m<3; m++) {
+				for( int n=0; n<3; n++) {
+					if (*(ptr1 + m) == *(ptr2 + n)) {
+						fcentroid.x += delaunay_vertices[*(ptr1 + m)].x;
+						fcentroid.y += delaunay_vertices[*(ptr1 + m)].y;
+					}
+				}
+			}
+
+			facet_centroids[k] = fcentroid/2;
+
+			//printf("Facet centroid[%i,%i] = (%.2f,%.2f)\n", i, Ac[k], facet_centroids[k].x, facet_centroids[k].y);
+		}
+	}
+}
+
+__global__ void compute_facetcentroids_kernel_3D(const int *Ao, const int *Ac, int4 *cell_vertices, float3 *delaunay_vertices, float3 *facet_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
+
+		// Facet Centroids, for each neighbor
+		for (int k = Ao[i]; k < Ao[i + 1]; ++k) {
+
+			float3 fcentroid;
+			fcentroid.x = fcentroid.y = fcentroid.z = 0.0f;
+			int* ptr1 = &cell_vertices[i].x;
+			int* ptr2 = &cell_vertices[Ac[k]].x;
+
+			for (int m = 0; m<4; m++) {
+				for (int n = 0; n<4; n++) {
+					if (*(ptr1 + m) == *(ptr2 + n)) {
+						fcentroid.x += delaunay_vertices[*(ptr1 + m)].x;
+						fcentroid.y += delaunay_vertices[*(ptr1 + m)].y;
+						fcentroid.z += delaunay_vertices[*(ptr1 + m)].z;
+					}
+				}
+			}
+
+			facet_centroids[k] = fcentroid / 3;
+
+			//printf("Facet centroid[%i,%i] = (%.2f,%.2f,%.2f)\n", i, Ac[k], facet_centroids[k].x, facet_centroids[k].y, facet_centroids[k].z);
+		}
 	}
 }
 //
 //template<class G, kernel K>
-//__global__ void compute_sizes_kernel(const int *Ao, const int *Ac, const int3 *cell_vertices, const int2 *delaunay_vertices, float *cell_sizes)
-//{
-//	// Cuda-style for
-//	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
-//		
-//
-//		int2 a_i2 = delaunay_vertices[cell_vertices[i].x] - delaunay_vertices[cell_vertices[i].y];
-//		int2 b_i2 = delaunay_vertices[cell_vertices[i].x] - delaunay_vertices[cell_vertices[i].z];
-//
-//		float3 a = make_float3(a_i2.x,a_i2.y,0.0f);
-//		float3 b = make_float3(b_i2.x,b_i2.y,0.0f);
-//
-//		cell_sizes[i] = 0.5*length(cross(a,b));
-//	}
-//}
-//
-/////////////////////////////////////////////////////////
+__global__ void compute_gammas_kernel(const int *Ao, const int *Ac, const int3 *cell_vertices, const float2 *delaunay_vertices, float *cell_sizes, float *cell_gammas)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
+
+		float2 a_2 = delaunay_vertices[cell_vertices[i].x] - delaunay_vertices[cell_vertices[i].y];
+		float2 b_2 = delaunay_vertices[cell_vertices[i].x] - delaunay_vertices[cell_vertices[i].z];
+
+		float3 a, b;
+		a.x = a_2.x; a.y = a_2.y; a.z = 0;
+		b.x = b_2.x; b.y = b_2.y; b.z = 0;
+
+		float area_i = 0.5*length(cross(a, b));
+		
+		cell_sizes[i] = area_i;
+		cell_gammas[i] = (1 / V) + (area_i / (Img_width*Img_height));
+
+		printf("[%i] size = %.2f, gamma = %.2f\n", i, cell_sizes[i], cell_gammas[i]);
+	}
+}
+
+///////////////////////////////////////////////////////
+
 //
 ///* SEGMENTATION KERNELS */
 //
 //template<class G, kernel K>
-//__global__ void segmentation_NCG_kernel(int c, const int *Ao, const int *Ac, const int *colors,
-//	const float *similarities, int *labels, float threshold)
-//{
-//	// Cuda-style for
-//	for (int i = threadIdx.x+blockIdx.x*blockDim.x;i < V;i += blockDim.x*gridDim.x)	{
-//		if (colors[i] != c) continue;
-//		
-//		// Here starts the segmentation 
-//		for (int s_i = Ao[i]; s_i < Ao[i+1]; s_i++) {
-//			int test = (similarities[s_i] <= threshold);
-//			labels[i] = ( ((test<<31)>>31) & rmin(labels[i],labels[Ac[s_i]]) ) | ( ((!test<<31)>>31) & labels[i] );
-//		}
-//
-//	}
-//}
-//
+__global__ void segmentation_NCG_kernel(int c, const int *Ao, const int *Ac, const int *colors,
+	const float *similarities, int *labels, float threshold)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x;i < V;i += blockDim.x*gridDim.x)	{
+		if (colors[i] != c) continue;
+		
+		// Here starts the segmentation 
+		for (int s_i = Ao[i]; s_i < Ao[i+1]; s_i++) {
+			int test = (similarities[s_i] <= threshold);
+			labels[i] = (((test << 31) >> 31) & min(labels[i], labels[Ac[s_i]])) | (((!test << 31) >> 31) & labels[i]);
+			//printf("test = %i , labels[%i] = %i\n", test, i, labels[i]);
+		}
+
+		
+	}
+}
+
 //template<class G, kernel K>
-//__global__ void path_compression_kernel(int *labels)
-//{
-//	// Cuda-style for
-//	for (int i = threadIdx.x+blockIdx.x*blockDim.x;i < V;i += blockDim.x*gridDim.x)	{
-//		do { 
-//			labels[i] = labels[labels[i]];
-//		} while(labels[i] != labels[labels[i]]);
-//	}
-//}
+__global__ void path_compression_kernel(int *labels)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x;i < V;i += blockDim.x*gridDim.x)	{
+		do { 
+			labels[i] = labels[labels[i]];
+		} while(labels[i] != labels[labels[i]]);
+	}
+}
 //
 //template<class G, kernel K>
 //__global__ void relabel_kernel(int *cell_indices, int *sizes, int *offsets, int *labels, int *region_labels)
@@ -270,8 +314,18 @@ __global__ void basic_colorpatterns_kernel(cudaTextureObject_t texObj, float *co
 {
 	// Cuda-style for
 	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
-		colorpatterns[i] = tex2D<float>(texObj,cell_centroids[i].x, Img_height - cell_centroids[i].y);
-		//printf("colorpattern[%i] = %.2f\n",i,colorpatterns[i]);
+		colorpatterns[i] = tex2D<float>(texObj,cell_centroids[i].x, cell_centroids[i].y);
+		//printf("colorpatterns[%i] = %.2f\n", i, colorpatterns[i]);
+	}
+}
+
+__global__ void basic_colorpatterns_kernel_3D(cudaTextureObject_t texObj, float *colorpatterns, float3 *cell_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
+		colorpatterns[i] = tex3D<float>(texObj, cell_centroids[i].x, cell_centroids[i].y, cell_centroids[i].z);
+		//colorpatterns[i] = ((float) i / V);
+		//printf("centroid[%i] = (%.2f,%.2f,%.2f) ;colorpatterns[%i] = %.2f\n", i, cell_centroids[i].x, cell_centroids[i].y, cell_centroids[i].z, i,colorpatterns[i]);
 	}
 }
 
@@ -314,6 +368,66 @@ __global__ void basic_colorpatterns_kernel(cudaTextureObject_t texObj, float *co
 //	}
 //}
 //
+
+__device__ bool SameSide(float3 &p, float3 &v1, float3 &v2, float3 &v3, float3 &v4)
+{
+	//float3 normal = cross(v2 - v1, v3 - v1);
+	//float dotV4 = dot(normal, v4 - v1);
+	//float dotP = dot_product(normal, p - v1);
+	//return ((dotV4 < 0) && (dotP < 0));
+	return true;
+}
+
+__device__ bool PointInTetrahedron(float3 &p, float3 &v1, float3 &v2, float3 &v3, float3 &v4)
+{
+	return	(SameSide(p, v1, v2, v3, v4) && SameSide(p, v2, v3, v4, v1) && SameSide(p, v3, v4, v1, v2) && SameSide(p, v4, v1, v2, v3));
+}
+
+__global__ void compute_colorpatterns_kernel_3D(cudaTextureObject_t texObj, float *colorpatterns, int4 *cell_vertices,
+	float3 *delaunay_vertices, float3 *cell_centroids)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
+
+		float pattern = 0;
+		int numcells = 0;
+		float3 cmin, cmax, citer;
+
+		cmin.x = rintf(fminf(delaunay_vertices[cell_vertices[i].x].x, fminf(delaunay_vertices[cell_vertices[i].y].x, fminf(delaunay_vertices[cell_vertices[i].z].x, delaunay_vertices[cell_vertices[i].w].x))));
+		cmin.y = rintf(fminf(delaunay_vertices[cell_vertices[i].x].y, fminf(delaunay_vertices[cell_vertices[i].y].y, fminf(delaunay_vertices[cell_vertices[i].z].y, delaunay_vertices[cell_vertices[i].w].y))));
+		cmin.z = rintf(fminf(delaunay_vertices[cell_vertices[i].x].z, fminf(delaunay_vertices[cell_vertices[i].y].z, fminf(delaunay_vertices[cell_vertices[i].z].z, delaunay_vertices[cell_vertices[i].w].z))));
+		
+		cmax.x = rintf(fmaxf(delaunay_vertices[cell_vertices[i].x].x, fmaxf(delaunay_vertices[cell_vertices[i].y].x, fmaxf(delaunay_vertices[cell_vertices[i].z].x, delaunay_vertices[cell_vertices[i].w].x))));
+		cmax.y = rintf(fmaxf(delaunay_vertices[cell_vertices[i].x].y, fmaxf(delaunay_vertices[cell_vertices[i].y].y, fmaxf(delaunay_vertices[cell_vertices[i].z].y, delaunay_vertices[cell_vertices[i].w].y))));
+		cmax.z = rintf(fmaxf(delaunay_vertices[cell_vertices[i].x].z, fmaxf(delaunay_vertices[cell_vertices[i].y].z, fmaxf(delaunay_vertices[cell_vertices[i].z].z, delaunay_vertices[cell_vertices[i].w].z))));
+
+		
+
+		for(citer.x = cmin.x; citer.x <= cmax.x; citer.x += 1.0) {
+			for(citer.y = cmin.y; citer.y <= cmax.y; citer.y += 1.0) {
+				for (citer.z = cmin.z; citer.z <= cmax.z; citer.z += 1.0) {
+					if (PointInTetrahedron(citer, delaunay_vertices[cell_vertices[i].x], delaunay_vertices[cell_vertices[i].y], delaunay_vertices[cell_vertices[i].z], delaunay_vertices[cell_vertices[i].w])) {
+						pattern += tex3D<float>(texObj, citer.x, citer.y, citer.z);
+						numcells++;
+					}
+				}
+			}
+		}
+
+		colorpatterns[i] = pattern/numcells;
+		//printf("[%i] pattern = %.2f, numcells = %i, colorpattern = %.2f\n", i, pattern, numcells, colorpatterns[i]);
+
+		if(!numcells){
+			colorpatterns[i] = tex3D<float>(texObj, cell_centroids[i].x, cell_centroids[i].y, cell_centroids[i].z);
+			numcells=1;
+		}
+		// 	printf("Cell = %i, Triangle = [(%i,%i);(%i,%i);(%i,%i)]\n",i
+		// 		,delaunay_vertices[cell_vertices[i].x].x, delaunay_vertices[cell_vertices[i].x].y
+		// 		,delaunay_vertices[cell_vertices[i].y].x, delaunay_vertices[cell_vertices[i].y].y
+		// 		,delaunay_vertices[cell_vertices[i].z].x, delaunay_vertices[cell_vertices[i].z].y);
+	}
+}
+
 //template<class G, kernel K>
 //__global__ void get_boundingbox_tex2D_kernel(cudaTextureObject_t texObj, int3 *cell_vertices, float2 *delaunay_vertices,
 //	float2 *minCoords, float2 *diffCoords)
@@ -501,121 +615,80 @@ __global__ void basic_colorpatterns_kernel(cudaTextureObject_t texObj, float *co
 /////////////////////////////////////////////////////////
 //
 ///* SIMILARITIES COMPUTATION KERNEL */
-//
-//__device__ bool FindIsovalue(float2 p1, float2 p2, cudaTextureObject_t texObj)
-//{
-//    int x = (int)p1.x, y = Img_height - (int)p1.y;
-//    int x2 = (int)p2.x, y2 = Img_height - (int)p2.y;
-//
-//    bool yLonger=false;
-//    int shortLen=y2-y;
-//    int longLen=x2-x;
-//    if (abs(shortLen)>abs(longLen))
-//    {
-//        int swap=shortLen;
-//        shortLen=longLen;
-//        longLen=swap;
-//        yLonger=true;
-//    }
-//    int decInc;
-//    if (longLen==0) decInc=0;
-//    else decInc = (shortLen << 16) / longLen;
-//
-//    if (yLonger)
-//    {
-//        if (longLen>0)
-//        {
-//            longLen+=y;
-//            y2=y;
-//            for (int j=0x8000+(x<<16);y<=longLen;++y)
-//            {
-//				float imgdata1 = tex2D<float>(texObj,x,y2);
-//				float imgdata2 = tex2D<float>(texObj,j>>16,y);
-//				for(int k=0; k<Num_isovalues; k++)
-//				{
-//					if( (imgdata1 - Isovalues[k])*(imgdata2 - Isovalues[k]) <= 0 )
-//						return true;
-//				}
-//
-//                x=j>>16;
-//                y2=y;
-//                j+=decInc;
-//            }
-//            return false;
-//        }
-//        longLen+=y;
-//        y2=y;
-//        for (int j=0x8000+(x<<16);y>=longLen;--y)
-//        {
-//			float imgdata1 = tex2D<float>(texObj,x,y2);
-//			float imgdata2 = tex2D<float>(texObj,j>>16,y);
-//			for(int k=0; k<Num_isovalues; k++)
-//			{
-//				if( (imgdata1 - Isovalues[k])*(imgdata2 - Isovalues[k]) <= 0 )
-//					return true;
-//			}
-//
-//            x=j>>16;
-//            y2=y;
-//            j-=decInc;
-//        }
-//        return false;
-//    }
-//
-//    if (longLen>0)
-//    {
-//        longLen+=x;
-//        x2=x;
-//        for (int j=0x8000+(y<<16);x<=longLen;++x)
-//        {
-//			float imgdata1 = tex2D<float>(texObj,x2,y);
-//			float imgdata2 = tex2D<float>(texObj,x,j>>16);
-//			for(int k=0; k<Num_isovalues; k++)
-//			{
-//				if( (imgdata1 - Isovalues[k])*(imgdata2 - Isovalues[k]) <= 0 )
-//					return true;
-//			}
-//
-//
-//            y=j>>16;
-//            x2=x;
-//            j+=decInc;
-//        }
-//        return false;
-//    }
-//    longLen+=x;
-//    x2=x;
-//    for (int j=0x8000+(y<<16);x>=longLen;--x)
-//    {
-//		float imgdata1 = tex2D<float>(texObj,x2,y);
-//		float imgdata2 = tex2D<float>(texObj,x,j>>16);
-//		for(int k=0; k<Num_isovalues; k++)
-//		{
-//			if( (imgdata1 - Isovalues[k])*(imgdata2 - Isovalues[k]) <= 0 )
-//				return true;
-//		}
-//
-//
-//        y=j>>16;
-//        x2=x;
-//        j-=decInc;
-//    }
-//    return false;
-//}
-//
+
+__device__ bool FindIsovalue(float2 p1, float2 p2, cudaTextureObject_t texObj)
+{
+	float2 v = p2 - p1;
+	int n = rintf(length(v));
+
+	float2 q1 = p1;
+	float2 q2 = q1 + (v / n);
+	for (int t = 0; t < n; ++t){
+		float q1_cp = tex2D<float>(texObj, q1.x, q1.y);
+		float q2_cp = tex2D<float>(texObj, q2.x, q2.y);
+		for (int k = 0; k<Num_isovalues; k++)
+		{
+			if ((q1_cp - Isovalues[k])*(q2_cp - Isovalues[k]) <= 0)
+				return true;
+		}
+		q1 = q2;
+		q2 += (v / n);
+	}
+	return false;
+}
+
+__device__ bool FindIsovalue_3D(float3 p1, float3 p2, cudaTextureObject_t texObj)
+{
+	float3 v = p2 - p1;
+	int n = rintf(length(v));
+
+	float3 q1 = p1;
+	float3 q2 = q1 + (v / n);
+	for (int t = 0; t < n; ++t){
+		float q1_cp = tex3D<float>(texObj, q1.x, q1.y, q1.z);
+		float q2_cp = tex3D<float>(texObj, q2.x, q2.y, q2.z);
+		for (int k = 0; k<Num_isovalues; k++)
+		{
+			if ((q1_cp - Isovalues[k])*(q2_cp - Isovalues[k]) <= 0)
+				return true;
+		}
+		q1 = q2;
+		q2 += (v / n);
+	}
+	return false;
+}
+
 //template<class G, kernel K>
-//__global__ void compute_similarity_kernel(const int *Ao, const int *Ac, cudaTextureObject_t texObj, float2 *cell_centroids, float2 *facet_centroids, const float *colorpatterns, float *similarities)
-//{
-//	// Cuda-style for
-//	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
-//		// look at neighbors
-//		for (int j = Ao[i]; j < Ao[i+1]; j++) {
-//   			if( FindIsovalue(cell_centroids[i], facet_centroids[j], texObj) || FindIsovalue(facet_centroids[j], cell_centroids[Ac[j]], texObj) )
-//				similarities[j] = 1.0f;
-//			else
-//				similarities[j] = similarity(colorpatterns[i],colorpatterns[Ac[j]]);
-//		}
-//	}
-//}
+__global__ void compute_similarity_kernel(const int *Ao, const int *Ac, cudaTextureObject_t texObj, float2 *cell_centroids, float2 *facet_centroids, const float *colorpatterns, float *similarities)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x+blockIdx.x*blockDim.x ; i < V ; i += blockDim.x*gridDim.x) {
+		// look at neighbors
+		for (int j = Ao[i]; j < Ao[i+1]; j++) {
+   			if( FindIsovalue(cell_centroids[i], facet_centroids[j], texObj) || FindIsovalue(facet_centroids[j], cell_centroids[Ac[j]], texObj) )
+				similarities[j] = 1.0f;
+			else
+				similarities[j] = similarity(colorpatterns[i],colorpatterns[Ac[j]]);
+
+			//printf("Similarity[%i,%i] = %.2f\n", i, Ac[j], similarities[j]);
+		}
+	}
+}
+
+__global__ void compute_similarity_kernel_3D(const int *Ao, const int *Ac, cudaTextureObject_t texObj, float3 *cell_centroids, float3 *facet_centroids, const float *colorpatterns, float *similarities)
+{
+	// Cuda-style for
+	for (int i = threadIdx.x + blockIdx.x*blockDim.x; i < V; i += blockDim.x*gridDim.x) {
+		// look at neighbors
+		for (int j = Ao[i]; j < Ao[i + 1]; j++) {
+			if (FindIsovalue_3D(cell_centroids[i], facet_centroids[j], texObj) || FindIsovalue_3D(facet_centroids[j], cell_centroids[Ac[j]], texObj))
+				similarities[j] = 1.0f;
+			else
+				similarities[j] = similarity(colorpatterns[i], colorpatterns[Ac[j]]);
+
+			//printf("Similarity[%i,%i] = %.2f\n", i, Ac[j], similarities[j]);
+		}
+	}
+}
 //
 /////////////////////////////////////////////////////////

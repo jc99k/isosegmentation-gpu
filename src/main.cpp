@@ -1,40 +1,40 @@
-//#include "cudatemplate.h"
-#include "cudagraphsegmentator.cuh"
+#include "Delaunay2D.cuh"
+#include "Delaunay3D.cuh"
+#include "Cuda_XGraph.cuh"
+#include "XReader.h"
+#include "XWriter.h"
+#include "Cuda_XGraph_Segmentator.cuh"
 
-using namespace std;
-
-typedef CCudaCSRGraphSegmentator<int> CGraphSegmentator;
+typedef CDelaunay_3D_Cuda_XGraph_Adaptor XSpace;
+typedef CCudaXGraph<XSpace> XGraph;
+typedef CXReader<XGraph> XReader;
+typedef CXWriter<XGraph> XWriter;
+typedef CCudaXGraphSegmentator<XGraph> XSegmentator;
 
 int main()
 {
-	/*GPU Segmentator Class*/
-	CGraphSegmentator IsoSegmentator;
+	XGraph x;
+	XReader Rx(x);
+	XWriter Wx(x);
 
-    IsoSegmentator.write();
+	Rx.load_file();
+
+	XSegmentator Sx(x);
 
 	/*Colorize graph*/
-	IsoSegmentator.colorize();
+	Sx.colorize();
 
 	/*Compute Color Patterns*/
-	//IsoSegmentator.compute_colorpatterns();
-	IsoSegmentator.write();
+	Sx.compute_colorpatterns_and_similarities();
 
-	/*Compute Cell Similarities*/
-	// gs.compute_similarities();
-    
 	/*Segmentate graph*/
-	// gs.segmentate();
-
-	/*Return Data From GPU*/
-	//     gs.GetDataFromGPU();
+	Sx.segmentate();
 
 
-// // ////////////////////////////
-
-//     // image.display();
-
-	// /*Output data*/
-	// ofstream os("graph_segmentation.txt", ifstream::out);
+//////////////////////////////////
+	
+	
+	Wx.save_file();
 
     return 0;
 }
