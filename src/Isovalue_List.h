@@ -11,8 +11,10 @@ public:
 	void load_values()
 	{
 		float f;
-		std::cout << "Enter Isovalues: ";
-		while (std::cin >> f)
+		std::cout << "Enter Isovalues: \n";
+		while (std::cin >> f){
+			if (f < 0) break;
 			this->push_back(f);
+		}
 	}
 };

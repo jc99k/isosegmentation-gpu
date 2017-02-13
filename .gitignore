@@ -14,3 +14,11 @@
 *.log
 Debug/
 x64/
+.idea/
+CMakeFiles/
+VS2013/
+CMakeCache.txt
+CMakeLists.txt
+Makefile
+cmake_install.cmake
+isosegmentation_gpu

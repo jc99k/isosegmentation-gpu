@@ -1,192 +1,364 @@
-#include "Delaunay2D.cuh"
-#include "Delaunay3D.cuh"
-#include "Cuda_XGraph.cuh"
 #include "Cuda_XGraph_Segmentator.cuh"
-#include "kernels.h"
-#include <cstdio>
+#include "Cuda_XGraph_Segmentator_Kernels.cuh"
 
-#include <curand_kernel.h>
-#include "thrust_custom_predicates.h"
+/////////////////////////////
 
 template<class X>
-CCudaXGraphSegmentator<X>::CCudaXGraphSegmentator(X& x) : m_X(x)
+inline int CCudaXGraphSegmentator<X>::nextpowerof2(int v)
 {
-	v = x->num_vertices();
-	e = x->num_edges();
-	dv = x->num_delaunayvertices();
+	v--;
+	v |= v >> 1;
+	v |= v >> 2;
+	v |= v >> 4;
+	v |= v >> 8;
+	v |= v >> 16;
+	v++;
+	return v;
+}
 
-	std::cout << "Threshold = ";
-	std::cin >> threshold;
+template<class X>
+CCudaXGraphSegmentator<X>::CCudaXGraphSegmentator(X& x) : m_X(x), m_graphcolorizer(x), m_similaritiescalculator(x)
+{
+	std::cout << "Op.Seg#1 : Num.Repeats = \n";
+	std::cin >> num_repeat_seg1;
+	std::cout << "Op.Seg#2 : Target #regions & Num.Repeats = \n";
+	std::cin >> nR_2 >> num_repeat_seg2;
+	std::cout << "Op.Seg#3 : Target #regions = \n";
+	std::cin >> nR_3;
 
-	m_isovaluelist->load_values();
-	num_isovalues = m_isovaluelist->size();
+	printf("Copying constant symbols...\n");
 
-	printf("Copy to constant symbols...\n");
-
-	cudaMemcpyToSymbol(V, &v, sizeof(int), 0, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(E, &e, sizeof(int), 0, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(DV, &dv, sizeof(int), 0, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(Num_isovalues, &num_isovalues, sizeof(int), 0, cudaMemcpyHostToDevice);
-	cudaMemcpyToSymbol(Isovalues, m_isovaluelist->data(), sizeof(IsovalueType)*num_isovalues, 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(V, &(m_X->num_cells()), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(E, &(m_X->num_edges()), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(DV, &(m_X->num_points()), sizeof(int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(Img_width, &(m_X->image_dimensions().x), sizeof(int), 0, cudaMemcpyHostToDevice);
 	cudaMemcpyToSymbol(Img_height, &(m_X->image_dimensions().y), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(Img_depth, &(m_X->image_dimensions().z), sizeof(int), 0, cudaMemcpyHostToDevice);
+	//cudaMemcpyToSymbol(Img_XYarea, &(m_X->image_xyarea()), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(Vol, &(m_X->image_vol()), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(Dim, &(XSpace::Dim), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(NCellVertices, &(XSpace::NCellVertices), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(NCellNeighbors, &(XSpace::NCellNeighbors), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(NFacetVertices, &(XSpace::NFacetVertices), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(NGraphColors, &(XSpace::NGraphColors), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(Num_isovalues, &(m_similaritiescalculator.num_isovalues()), sizeof(int), 0, cudaMemcpyHostToDevice);
+	cudaMemcpyToSymbol(Isovalues, m_similaritiescalculator.isovalues_data(), sizeof(IsovalueType)*m_similaritiescalculator.num_isovalues(), 0, cudaMemcpyHostToDevice);
+	//cudaMemcpyToSymbol(Threshold, &threshold, sizeof(int), 0, cudaMemcpyHostToDevice);
+
+	int imageneighborsteps_h[26];
+	// Z
+	imageneighborsteps_h[0] = 1;
+	imageneighborsteps_h[1] = 1 + m_X->image_dimensions().x;
+	imageneighborsteps_h[2] = m_X->image_dimensions().x;
+	imageneighborsteps_h[3] = -1 + m_X->image_dimensions().x;
+	imageneighborsteps_h[4] = -1;
+	imageneighborsteps_h[5] = -1 - m_X->image_dimensions().x;
+	imageneighborsteps_h[6] = -m_X->image_dimensions().x;
+	imageneighborsteps_h[7] = 1 - m_X->image_dimensions().x;
+
+	// Z - 1
+	imageneighborsteps_h[8] = -m_X->image_dimensions().x*m_X->image_dimensions().y;
+	imageneighborsteps_h[9] = imageneighborsteps_h[8] + imageneighborsteps_h[0];
+	imageneighborsteps_h[10] = imageneighborsteps_h[8] + imageneighborsteps_h[1];
+	imageneighborsteps_h[11] = imageneighborsteps_h[8] + imageneighborsteps_h[2];
+	imageneighborsteps_h[12] = imageneighborsteps_h[8] + imageneighborsteps_h[3];
+	imageneighborsteps_h[13] = imageneighborsteps_h[8] + imageneighborsteps_h[4];
+	imageneighborsteps_h[14] = imageneighborsteps_h[8] + imageneighborsteps_h[5];
+	imageneighborsteps_h[15] = imageneighborsteps_h[8] + imageneighborsteps_h[6];
+	imageneighborsteps_h[16] = imageneighborsteps_h[8] + imageneighborsteps_h[7];
+
+	// Z + 1
+	imageneighborsteps_h[17] = m_X->image_dimensions().x*m_X->image_dimensions().y;
+	imageneighborsteps_h[18] = imageneighborsteps_h[17] + imageneighborsteps_h[0];
+	imageneighborsteps_h[19] = imageneighborsteps_h[17] + imageneighborsteps_h[1];
+	imageneighborsteps_h[20] = imageneighborsteps_h[17] + imageneighborsteps_h[2];
+	imageneighborsteps_h[21] = imageneighborsteps_h[17] + imageneighborsteps_h[3];
+	imageneighborsteps_h[22] = imageneighborsteps_h[17] + imageneighborsteps_h[4];
+	imageneighborsteps_h[23] = imageneighborsteps_h[17] + imageneighborsteps_h[5];
+	imageneighborsteps_h[24] = imageneighborsteps_h[17] + imageneighborsteps_h[6];
+	imageneighborsteps_h[25] = imageneighborsteps_h[17] + imageneighborsteps_h[7];
 	
-	printf("Done.\n");
+	cudaMemcpyToSymbol(ImageNeighborSteps, imageneighborsteps_h, sizeof(int) * 26, 0, cudaMemcpyHostToDevice);
 
-	ThreadsPerBlock = dim3(1024, 1, 1);
-	BlocksInGrid = dim3(min((v + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, 65535), 1, 1);
-}
+	ThreadsPerBlock = dim3(MAX_THREADS_PER_BLOCK, 1, 1);
+	BlocksInGrid = dim3(min((m_X->num_cells() + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, 65535), 1, 1);
 
-template<class X>
-void CCudaXGraphSegmentator<X>::colorize()
-{
-	printf("Colorization...\n");
-	
-	// device storage for the random numbers
-	thrust::device_vector<float> randoms(v);
-	float* rawPtr_randoms = thrust::raw_pointer_cast(randoms.data());
+	m_graphcolorizer.colorize();
+	m_similaritiescalculator.compute_similarities();
+	region_labels.resize(m_X->num_cells());
 
-	// generate randoms
-	rng_generate_kernel << <BlocksInGrid, ThreadsPerBlock >> >(rawPtr_randoms);
-	thrust::fill(thrust::cuda::par, m_X->updatepatterns(), m_X->updatepatterns() + v, -1);
-
-	for (int c = 0; c < v; ++c) {
-		color_jpl_kernel << <BlocksInGrid, ThreadsPerBlock >> >(c, m_X->xadj(), m_X->adjncy(), rawPtr_randoms, m_X->updatepatterns());
-		int left = thrust::count(thrust::cuda::par, m_X->updatepatterns(), m_X->updatepatterns() + v, -1);
-		if (left == 0)
-		{
-			num_colors = c + 1;
-			break;
-		}
-	}
-	printf("Done.\n");
-}
-
-template<class X>
-void CCudaXGraphSegmentator<X>::compute_colorpatterns_and_similarities()
-{
-	
-	thrust::device_vector<DelaunayVerticesType> cell_centroids(v);
-	thrust::device_vector<DelaunayVerticesType> facet_centroids(e * 2);
-	DelaunayVerticesType* rawPtr_cell_centroids = thrust::raw_pointer_cast(cell_centroids.data());
-	DelaunayVerticesType* rawPtr_facet_centroids = thrust::raw_pointer_cast(facet_centroids.data());
-
-	//flip_verticality_kernel << <dv, 1 >> >(m_X->delaunayvertices());
-	//compute_cellcentroids_kernel << <nb, nt >> >(m_X->xadj(), m_X->adjncy(), m_X->cellvertices(), m_X->delaunayvertices(), rawPtr_cell_centroids);
-	//basic_colorpatterns_kernel << <nb, nt >> > (m_X->texObject(), m_X->colorpatterns(), rawPtr_cell_centroids);
-	//compute_facetcentroids_kernel << <nb, nt >> > (m_X->xadj(), m_X->adjncy(), m_X->cellvertices(), m_X->delaunayvertices(), rawPtr_facet_centroids);
-	//compute_similarity_kernel << <nb, nt >> >(m_X->xadj(), m_X->adjncy(), m_X->texObject(), rawPtr_cell_centroids, rawPtr_facet_centroids, m_X->colorpatterns(), m_X->similarities());
-
-	printf("Color pattern computation...\n");
-	flip_verticality_kernel_3D << <dv, 1 >> >(m_X->delaunayvertices());
-	compute_cellcentroids_kernel_3D << <BlocksInGrid, ThreadsPerBlock >> >(m_X->xadj(), m_X->adjncy(), m_X->cellvertices(), m_X->delaunayvertices(), rawPtr_cell_centroids);
-	//basic_colorpatterns_kernel_3D << <nb, nt >> > (m_X->texObject(), m_X->colorpatterns(), rawPtr_cell_centroids);
-	compute_colorpatterns_kernel_3D << <BlocksInGrid, ThreadsPerBlock >> > (m_X->texObject(), m_X->colorpatterns(), m_X->cellvertices(), m_X->delaunayvertices(), rawPtr_cell_centroids);
-	printf("Done.\n");
-
-	printf("Similarity computation...\n");
-	compute_facetcentroids_kernel_3D << <BlocksInGrid, ThreadsPerBlock >> > (m_X->xadj(), m_X->adjncy(), m_X->cellvertices(), m_X->delaunayvertices(), rawPtr_facet_centroids);
-	compute_similarity_kernel_3D << <BlocksInGrid, ThreadsPerBlock >> >(m_X->xadj(), m_X->adjncy(), m_X->texObject(), rawPtr_cell_centroids, rawPtr_facet_centroids, m_X->colorpatterns(), m_X->similarities());
 	printf("Done.\n");
 }
 
 template<class X>
 void CCudaXGraphSegmentator<X>::segmentate()
 {
-	int repeat = 30;
-	//float threshold = 0.02f;
-	thrust::sequence(thrust::cuda::par, m_X->labels(), m_X->labels() + v);
-	for (int i = 0; i < repeat; ++i) {
-		for (int c = 0; c < num_colors; ++c)
-			segmentation_NCG_kernel << <BlocksInGrid, ThreadsPerBlock >> >(c, m_X->xadj(), m_X->adjncy(), m_X->updatepatterns(), m_X->similarities(), m_X->labels(), threshold);
-		path_compression_kernel << <BlocksInGrid, ThreadsPerBlock >> >(m_X->labels());
+	cudaDeviceSynchronize(); printf("************* SEGMENTATION: START! *************\n");
+	float ms1;
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+
+	/* PERFORM SEGMENTATION */
+	/* SORT CELLS BY UPDATEPATTERN */
+	/* USE FILTERS INSTEAD OF BITONIC SORT (WAY FASTER!) */
+
+	thrust::device_vector<int> updatepattern_bounds(XSpace::NGraphColors + 1, 0);
+	thrust::device_vector<int> upd_count_helper(1);
+
+	int* dp_updatepattern_bounds = thrust::raw_pointer_cast(updatepattern_bounds.data());
+	int* dp_upd_count_helper = thrust::raw_pointer_cast(upd_count_helper.data());
+
+	for (int c = 0; c < XSpace::NGraphColors; ++c){
+		filter_k_c << <BlocksInGrid, ThreadsPerBlock >> >(c, m_X->sortedcells(), m_X->labels(), m_X->num_cells(), dp_upd_count_helper);
+		updatepattern_bounds[c + 1] = upd_count_helper[0];
 	}
+	
+	///* PERFORM NCG ITERATIONS */
+	thrust::sequence(thrust::cuda::par, m_X->labels(), m_X->labels() + m_X->num_cells());
+	for (int i = 0; i < num_repeat_seg1; ++i) {
+		for (int c = 0; c < XSpace::NGraphColors; ++c) {
+			//printf("---------------------------------------------------------\n");
+			segmentation_NCG_kernel3 <XSpace> << < ( updatepattern_bounds[c+1] - updatepattern_bounds[c] + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK, MAX_THREADS_PER_BLOCK >> > (c, dp_updatepattern_bounds, m_X->sortedcells(), m_X->neighbors(), m_X->similarities(), m_X->labels());
+			//cudaDeviceSynchronize();
+		}
+			//segmentation_NCG_kernel3 <XSpace> << < ((int)updatepattern_sizes[c] + MAX_THREADS_PER_BLOCK - 1) / MAX_THREADS_PER_BLOCK, MAX_THREADS_PER_BLOCK >> > (c, dp_updatepattern_bounds, m_X->sortedcells(), m_X->neighbors(), m_X->similarities(), m_X->labels());
+			//segmentation_NCG_kernel4 <XSpace> << < (int)updatepattern_sizes[c], WARP_SIZE >> > (c, dp_updatepattern_bounds, m_X->sortedcells(), m_X->neighbors(), m_X->similarities(), m_X->labels());
+	//	printf("Finished iteration #%i\n", i);
+	}
+	
+	////////////////////////////////////////////////
+
+	/* OBTAIN REGION LABELS */
+	thrust::device_vector<int> region_count_helper(1);
+	int* dp_region_count_helper = thrust::raw_pointer_cast(region_count_helper.data());
+	int* dp_region_labels = thrust::raw_pointer_cast(region_labels.data());
+	
+	filter_k << <BlocksInGrid, ThreadsPerBlock >> >(dp_region_labels, m_X->labels(), m_X->num_cells(), dp_region_count_helper);
+
+	num_regions = region_count_helper[0];
+	region_labels.resize(num_regions);
+	region_numcells.resize(num_regions);
+	region_sizes.resize(num_regions);
+	region_colorpatterns.resize(num_regions);
+	dp_region_labels = thrust::raw_pointer_cast(region_labels.data());
+	int*	dp_region_numcells = thrust::raw_pointer_cast(region_numcells.data());
+	float*	dp_region_sizes = thrust::raw_pointer_cast(region_sizes.data());
+	float*	dp_region_colorpatterns = thrust::raw_pointer_cast(region_colorpatterns.data());
+
+	/* Sort region labels: Bitonic Sort*/
+	for (int k = 2; k <= nextpowerof2(num_regions); k <<= 1) {
+		for (int j = k >> 1; j>0; j = j >> 1) {
+			bitonic_sort_step<int> << <(num_regions + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, ThreadsPerBlock >> >(dp_region_labels, num_regions, j, k);
+		}
+	}
+	
+	region_bounds.resize(num_regions + 1, 0);
+	region_bounds[num_regions] = m_X->num_cells();
+	int* dp_region_bounds = thrust::raw_pointer_cast(region_bounds.data());
+	
+	thrust::device_vector<int> rbound_count_helper(1);
+	int* dp_rbound_count_helper = thrust::raw_pointer_cast(rbound_count_helper.data());
+
+	filter_k_c << <BlocksInGrid, ThreadsPerBlock >> >(0, m_X->sortedcells(), m_X->labels(), m_X->num_cells(), dp_rbound_count_helper);
+	region_bounds[1] = rbound_count_helper[0];
+	filter_k_not_c << <BlocksInGrid, ThreadsPerBlock >> >(0, m_X->sortedcells(), m_X->labels(), m_X->num_cells(), dp_rbound_count_helper);
+
+	
+	/* Bitonic Sort */
+	for (int k = 2; k <= nextpowerof2(m_X->num_cells() - region_bounds[1]); k <<= 1) {
+		for (int j = k >> 1; j>0; j = j >> 1) {
+			bitonic_sort_by_composition_key_step<int, int> << <BlocksInGrid, ThreadsPerBlock >> >(m_X->labels(), m_X->sortedcells() + region_bounds[1], m_X->num_cells() - region_bounds[1], j, k);
+		}
+	}
+	
+	
+	///* SORT CELLS BY REGION */
+	//thrust::sequence(thrust::cuda::par, m_X->sortedcells(), m_X->sortedcells() + m_X->num_cells());
+	///* Bitonic Sort */
+	//for (int k = 2; k <= nextpowerof2(m_X->num_cells()); k <<= 1) {
+	//	for (int j = k >> 1; j>0; j = j >> 1) {
+	//		bitonic_sort_by_composition_key_step<int, int> << <BlocksInGrid, ThreadsPerBlock >> >(m_X->labels(), m_X->sortedcells(), m_X->num_cells(), j, k);
+	//	}
+	//}
+	/* OBTAIN REGION BOUNDS (For reduction of every region in parallel) */
+	//region_bounds.resize(num_regions + 1, 0);
+	//region_bounds[num_regions] = m_X->num_cells();
+	//int* dp_region_bounds = thrust::raw_pointer_cast(region_bounds.data());
+
+	bounds_kernel << <BlocksInGrid, ThreadsPerBlock >> >(dp_region_bounds, m_X->sortedcells() + 1, m_X->labels(), dp_region_labels, num_regions);
+	inv_prefixsum_kernel << <(num_regions + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, ThreadsPerBlock >> >(dp_region_numcells, dp_region_bounds, num_regions);
+	
+	/* Relabel : The next steps are easier if region labels are contiguous */
+	relabel_kernel_3 << <num_regions, ThreadsPerBlock >> >(dp_region_bounds, dp_region_labels, m_X->labels(), m_X->sortedcells());
+	thrust::sequence(thrust::device, region_labels.begin(), region_labels.end());
+
+	///* REDUCE REGIONS */
+	cell_reduction_kernel <BaseClass><< <num_regions, 1024 >> >
+		(dp_region_bounds, m_X->sortedcells(), m_X->sizes(), m_X->colorpatterns(),
+		/*dp_region_numcells,*/ dp_region_sizes, dp_region_colorpatterns);
+
+	
+	/* SORT REGIONS DECREMENTALLY BY GAMMA */
+	thrust::device_vector<float> region_gammas(num_regions);
+	float *dp_region_gammas = thrust::raw_pointer_cast(region_gammas.data());
+	
+	compute_gammas_kernel << <(num_regions + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, ThreadsPerBlock >> >(dp_region_numcells, dp_region_sizes, dp_region_gammas, num_regions);
+
+
+	/* Quadruple Bitonic Sort by Key : To move a region along with its properties */
+	for (int k = 2; k <= nextpowerof2(num_regions); k <<= 1) {
+		for (int j = k >> 1; j>0; j = j >> 1) {
+			bitonic_quadruple_sort_by_key_step<float, int, int, float, float><<<(num_regions + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, ThreadsPerBlock >>>
+				(dp_region_gammas, dp_region_labels, dp_region_numcells, dp_region_sizes, dp_region_colorpatterns, num_regions, j, k);
+		}
+	}
+	
+	region_boundlabels = region_labels;
+	relabel_kernel_4 << <num_regions, ThreadsPerBlock >> >(dp_region_bounds, dp_region_labels, m_X->labels(), m_X->sortedcells());
+	thrust::sequence(thrust::device, region_labels.begin(), region_labels.end());
+
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ms1, start, stop);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	cudaDeviceSynchronize(); printf("Segmentation Operator #1: %i regions (%.2f ms)\n", num_regions, ms1);
+
+	///* OBTAIN NEW REGION BOUNDS : for the next segmentation operator */
+
+	
+
+	//for (int i = 0; i < num_regions; ++i) region_bounds[i + 1] = region_bounds[i] + region_numcells[i];
+
+	///* Bitonic Sort */
+	//for (int k = 2; k <= nextpowerof2(m_X->num_cells()); k <<= 1) {
+	//	for (int j = k >> 1; j>0; j = j >> 1) {
+	//		bitonic_sort_by_composition_key_step<int, int> << <BlocksInGrid, ThreadsPerBlock >> >(m_X->labels(), m_X->sortedcells(), m_X->num_cells(), j, k);
+	//	}
+	//}
+
+	//bounds_kernel << <BlocksInGrid, ThreadsPerBlock >> >(dp_region_bounds, m_X->sortedcells() + 1, m_X->labels(), dp_region_labels, num_regions);
+	
 }
 
 template<class X>
 void CCudaXGraphSegmentator<X>::segmentate2()
 {
-	///* CELL VECTORS */
-	//thrust::device_vector<float> cell_sizes(v);
-	//thrust::device_vector<float> cell_gammas(v);
-	//thrust::device_vector<int> cell_sortedlabels(m_X->labels(), m_X->labels() + v);
-	//thrust::device_vector<float> cell_colorpatterns(m_X->colorpatterns(), m_X->colorpatterns() + v);
-	//thrust::device_vector<int> cell_offsets(thrust::counting_iterator<int>(0), thrust::counting_iterator<int>(v));
+	/* SEGMENTATION OPERATOR #2 */
+	if (num_regions <= nR_2) return;
+	printf("About to segmentate2, #Current Regions = %i, #Target Regions = %i\n", num_regions, nR_2);
+	
+	float ms1;
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+	
+	int* dp_sorted_cells = m_X->sortedcells();
+	int* dp_region_boundlabels = thrust::raw_pointer_cast(region_boundlabels.data());
+	int* dp_region_bounds = thrust::raw_pointer_cast(region_bounds.data());
+	int *dp_region_labels = thrust::raw_pointer_cast(region_labels.data());
+	float *dp_region_colorpatterns = thrust::raw_pointer_cast(region_colorpatterns.data());
+	
+	m_similaritiescalculator.reset_similarities();
+	cudaDeviceSynchronize();
 
-	//compute_gammas_kernel << <nb, nt >> >(m_X->xadj(), m_X->adjncy(), m_X->cellvertices(), m_X->delaunayvertices(), thrust::raw_pointer_cast(cell_sizes.data()), thrust::raw_pointer_cast(cell_gammas.data()));
-
-	///* SORT CELL VECTORS BY KEY (KEY = CELL LABEL) */
-
-	//thrust::sort_by_key(cell_sortedlabels.begin(), cell_sortedlabels.end(),
-	//	thrust::make_zip_iterator(thrust::make_tuple(cell_sizes.begin(), cell_gammas.begin(), cell_offsets.begin(), cell_colorpatterns.begin())));
-
-	///* GET NUMBER OF REGIONS */
-	//thrust::device_vector<int> region_labels(v);
-	//thrust::device_vector<int>::iterator uniquelabels_end = thrust::unique_copy(cell_sortedlabels.begin(), cell_sortedlabels.end(), region_labels.begin());
-	//num_regions = uniquelabels_end - region_labels.begin();
-
-	///* RESIZE OUTPUT VECTORS */
-
-	//region_labels.resize(num_regions);
-	//thrust::device_vector<float>    region_sizes(num_regions);
-	//thrust::device_vector<float>    region_gammas(num_regions);
-	//thrust::device_vector<float>  region_colorpatterns(num_regions);
-	//thrust::device_vector<int>    region_offsets(num_regions);
-	//
-	// //// print
-	// //printf("number of cells = %i\n",v);
-	// //thrust::host_vector<int> h01(cell_sortedlabels);
-	// //thrust::host_vector<float> h02(cell_colorpatterns);
-	// //for(int i = 0; i < v; i++) printf("%i ", h01[i]); printf("\n");
-	// //for(int i = 0; i < v; i++) printf("%.2f ", h02[i]); printf("\n");
-
-	// /* GROUP REDUCTION: (Tuple = {int,int,float}) */
-	// thrust::reduce_by_key(cell_sortedlabels.begin(), cell_sortedlabels.end(),
-	//	 thrust::make_zip_iterator(thrust::make_tuple(cell_gammas.begin(), cell_sizes.begin(), cell_colorpatterns.begin())),
-	//	 region_labels.begin(),
-	//	 thrust::make_zip_iterator(thrust::make_tuple(region_gammas.begin(), region_sizes.begin(), region_colorpatterns.begin())),
-	//	 thrust::equal_to<int>(),
-	//	 TuplePlus<thrust::tuple<int, int, float>>());
-
-	// cell_sizes.clear();
-	// cell_gammas.clear();
-	// cell_sortedlabels.clear();
-	// cell_colorpatterns.clear();
-
-	// /* REGION OFFSETS */
-	// thrust::exclusive_scan(region_numcells.begin(), region_numcells.end(), region_offsets.begin());
-
-	// /* SORT REGIONS DECREMENTALLY BY GAMMA */
-	// thrust::sort_by_key(region_gammas.begin(), region_gammas.end(),
-	//	 thrust::make_zip_iterator(thrust::make_tuple(region_labels.begin(), region_sizes.begin(), region_colorpatterns.begin(), region_offsets.begin())),
-	//	 thrust::greater<int>());
-
-	// /** SEGMENTATION **/
-
-	// /* RELABEL FROM 0 */
-	// int *dPtr_cell_offsets, *dPtr_region_numcells, *dPtr_region_offsets, *dPtr_region_labels;
-	// dPtr_cell_offsets = thrust::raw_pointer_cast(cell_offsets.data());
-	// dPtr_region_labels = thrust::raw_pointer_cast(region_labels.data());
-	// dPtr_region_numcells = thrust::raw_pointer_cast(region_numcells.data());
-	// dPtr_region_offsets = thrust::raw_pointer_cast(region_offsets.data());
-
-	// thrust::copy(thrust::counting_iterator<int>(0), thrust::counting_iterator<int>(num_regions), region_labels.begin());
-	// relabel_kernel<G, K> << <num_regions, min(region_numcells[0], 1024) >> >(dPtr_cell_offsets, dPtr_region_numcells, dPtr_region_offsets, dPtr_labels, dPtr_region_labels);
-
-
-	// // print                                            
-	// printf("Number of regions = %i\n", num_regions);
-	// thrust::host_vector<int> h1(region_labels);
-	// thrust::host_vector<float> h2(region_sizes);
-	// thrust::host_vector<float> h3(region_gammas);
-	// thrust::host_vector<float> h4(region_colorpatterns);
-	// for (int i = 0; i < num_regions; i++) printf("%i ", h1[i]); printf("\n");
-	// for (int i = 0; i < num_regions; i++) printf("%.2f ", h2[i]); printf("\n");
-	// for (int i = 0; i < num_regions; i++) printf("%.2f ", h3[i]); printf("\n");
-	// for (int i = 0; i < num_regions; i++) printf("%.2f ", h4[i]); printf("\n");
+	for (int k = 0; k < num_repeat_seg2; ++k) 
+		segmentation_NRG_kernel <XSpace> << <num_regions - nR_2, ThreadsPerBlock.x/2, nR_2*sizeof(float) >> > (nR_2, dp_region_bounds, dp_region_boundlabels, dp_sorted_cells, m_X->labels(), m_X->neighbors(), m_X->similarities(), dp_region_colorpatterns, dp_region_labels);
+	relabel_kernel_2 << <BlocksInGrid, ThreadsPerBlock >> >(m_X->labels(), dp_region_labels);
+	num_regions = nR_2;
+	
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ms1, start, stop);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	cudaDeviceSynchronize(); printf("Segmentation Operator #2: %i regions (%.2f ms)\n", num_regions, ms1);
+	
 }
 
-////////////////////////////////////////////////
-//template class CCudaXGraphSegmentator< CCudaXGraph< CDelaunay_2D_Cuda_XGraph_Adaptor > >;
+template<class X>
+void CCudaXGraphSegmentator<X>::segmentate3()
+{
+	/* SEGMENTATION OPERATOR #3 */
+	if (num_regions <= nR_3) return;
+	printf("About to segmentate3, nR = %i\n", nR_3);
+	
+	float ms1;
+	cudaEvent_t start, stop;
+	cudaEventCreate(&start);
+	cudaEventCreate(&stop);
+	cudaEventRecord(start, 0);
+
+	thrust::device_vector<int> region_keeper(region_labels);
+	thrust::device_vector<float> all_similarities;
+	thrust::device_vector<int> all_similarities_coords;
+
+	int *dp_region_keeper = thrust::raw_pointer_cast(region_keeper.data());
+	int *dp_region_labels = thrust::raw_pointer_cast(region_labels.data());
+	float *dp_region_colorpatterns = thrust::raw_pointer_cast(region_colorpatterns.data());
+	float *dp_all_similarities;
+	int *dp_all_similarities_coords;
+	int nR = nR_2; 
+	int nR_sq;
+
+	//int count = 0;
+	do {
+		//printf("Segmentate3, iteration #%i\n", count++);
+		nR_sq = nR*nR;
+		all_similarities.resize(nR_sq);
+		all_similarities_coords.resize(nR_sq);
+		
+		dp_all_similarities = thrust::raw_pointer_cast(all_similarities.data());
+		dp_all_similarities_coords = thrust::raw_pointer_cast(all_similarities_coords.data());
+
+		all_similarities_kernel << <BlocksInGrid, ThreadsPerBlock >> >(nR, dp_region_labels, dp_region_colorpatterns, dp_all_similarities, dp_all_similarities_coords);
+
+		/* BITONIC SORT Major step */
+		for (int k = 2; k <= nextpowerof2(nR_sq); k <<= 1) {
+			/* Minor step */
+			for (int j = k >> 1; j>0; j = j >> 1) {
+				bitonic_sort_by_key_step<float, int> << <(nR*nR + ThreadsPerBlock.x - 1) / ThreadsPerBlock.x, ThreadsPerBlock >> >(dp_all_similarities, dp_all_similarities_coords, nR_sq, j, k);
+			}
+		}
+
+		int position = all_similarities_coords[0];
+		int x = position % nR;
+		int y = position / nR;
+
+		int a = min(x, y);
+		int b = max(x, y);
+		//printf("a = %i, b = %i\n", a, b);
+
+		region_colorpatterns[a] = (region_colorpatterns[a] * region_sizes[a] + region_colorpatterns[b] * region_sizes[b]) / (region_sizes[a] + region_sizes[b]);
+		region_sizes[a] += region_sizes[b];
+
+		thrust::replace(thrust::device, region_keeper.begin(), region_keeper.end(), region_labels[b], region_labels[a]);
+
+		region_labels.erase(region_labels.begin() + b);
+		region_sizes.erase(region_sizes.begin() + b);
+		region_colorpatterns.erase(region_colorpatterns.begin() + b);
+		
+		nR--;
+	} while (nR > nR_3);
+
+	relabel_kernel_1 <<< nR_2, 1 >>>(nR_2, nR_3, dp_region_keeper, dp_region_labels);
+	relabel_kernel_2 <<<BlocksInGrid, ThreadsPerBlock >>>(m_X->labels(), dp_region_keeper);
+
+	cudaEventRecord(stop, 0);
+	cudaEventSynchronize(stop);
+	cudaEventElapsedTime(&ms1, start, stop);
+	cudaEventDestroy(start);
+	cudaEventDestroy(stop);
+	cudaDeviceSynchronize(); printf("Segmentation Operator #3: %i regions (%.2f ms)\n", nR, ms1);
+	
+}
+
+//////////////////////////////////////////////////
+template class CCudaXGraphSegmentator< CCudaXGraph< CDelaunay_2D_Cuda_XGraph_Adaptor > >;
 template class CCudaXGraphSegmentator< CCudaXGraph< CDelaunay_3D_Cuda_XGraph_Adaptor > >;
-////////////////////////////////////////////////
+template class CCudaXGraphSegmentator< CCudaXGraph< CImage_2D_Cuda_XGraph_Adaptor	 > >;
+template class CCudaXGraphSegmentator< CCudaXGraph< CImage_3D_Cuda_XGraph_Adaptor	 > >;
+//////////////////////////////////////////////////
